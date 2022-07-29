@@ -1,0 +1,30 @@
+{
+    "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentParameters.json#",
+    "contentVersion": "1.0.0.0",
+    "parameters": {
+        "Prefix": {
+            "value": "lab"
+        },
+        "ClientAllowedIP": {
+            "value": "0.0.0.0/32"
+        },
+        "VmAdminUser": {
+            "value": "vmadmin"
+        },
+        "VmAdminPassword": {
+            "value": "GEN-PASSWORD"
+        },
+        "DomainName": {
+            "value": "domain1.local"
+        },
+        "NumberOfMemberServers": {
+            "value": "2"
+        },
+        "vmSizeDCs": {
+            "value": "Standard_D4s_v3"
+        },
+        "vmSizeMemberServers": {
+            "value": "Standard_D4s_v3"
+        },
+    }
+}

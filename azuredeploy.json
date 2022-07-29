@@ -1,0 +1,665 @@
+{
+    "$schema": "https://schema.management.azure.com/schemas/2015-01-01/deploymentTemplate.json#",
+    "contentVersion": "1.0.0.0",
+    "parameters": {
+        "Prefix": {
+            "type": "string",
+            "metadata": {
+                "description": "The prefix string to add to all resources"
+            },
+            "defaultValue": "lab"
+        },
+        "ClientAllowedIP": {
+            "type": "string",
+            "metadata": {
+                "description": "The IPAddress CIDR for RDP access to the servers"
+            },
+            "defaultValue": "0.0.0.0/32"
+        },
+        "VmAdminUser": {
+            "type": "string",
+            "metadata": {
+                "description": "The local Administrator user"
+            },
+            "defaultValue": "vmadmin"
+        },
+        "VmAdminPassword": {
+            "type": "securestring",
+            "metadata": {
+                "description": "The local Administrator password"
+            },
+            "defaultValue": "P@55w0rd!P@55w0rd?"
+        },
+        "DomainName": {
+            "type": "string",
+            "metadata": {
+                "description": "The Active Directory FQDN"
+            },
+            "defaultValue": "domain1.local"
+        },
+        "NumberOfMemberServers": {
+            "type": "int",
+            "metadata": {
+                    "description": "The amount of member servers to create"
+            },
+            "defaultValue": 2
+        },
+        "vmSizeDCs": {
+            "type": "string",
+            "metadata": {
+                "description": "The VM size to use for the DCs"
+            },
+            "defaultValue": "Standard_D4s_v3"
+        },
+        "vmSizeMemberServers": {
+            "type": "string",
+            "metadata": {
+                "description": "The VM size to use for the member servers"
+            },
+            "defaultValue": "Standard_D4s_v3"
+        },
+        "Location": {
+            "type": "string",
+            "metadata": {
+                    "description": "Location for all resources. Defaults to the location of resource group if not specified."
+            },
+            "defaultValue": "[resourceGroup().location]"
+        }
+    },
+    "variables": {
+
+        "nsgName": "[format('{0}-nsg', parameters('Prefix'))]",
+        "publicIpName": "[format('{0}-pip', parameters('Prefix'))]",
+        "availabilitySetName": "[format('{0}-avset', parameters('Prefix'))]",
+
+        "vnetName": "[format('{0}-vnet', parameters('Prefix'))]",
+        "vnetPrefix": "10.0.0.0/16",
+
+        "PrefixDCs": "dc",
+        "PrefixMembers": "srv",
+
+        "subnetName": "[format('{0}-subnet', parameters('Prefix'))]",
+        "subnetPrefix": "10.0.0.0/24",
+        "subnetPrefixSplit": "[split(variables('subnetPrefix'), '.')]",
+        "ipOffsetStart": 10,
+        "firstDcPrivateIp": "[format('{0}.{1}.{2}.{3}', variables('subnetPrefixSplit')[0], variables('subnetPrefixSplit')[1], variables('subnetPrefixSplit')[2], add(variables('ipOffsetStart'), 1))]",
+        "secondDcPrivateIp": "[format('{0}.{1}.{2}.{3}', variables('subnetPrefixSplit')[0], variables('subnetPrefixSplit')[1], variables('subnetPrefixSplit')[2], add(variables('ipOffsetStart'), 2))]",
+
+        "vnetID": "[resourceId('Microsoft.Network/virtualNetworks', variables('vnetName'))]",
+        "subnetId": "[concat(variables('vnetID'), '/subnets/', variables('subnetName'))]",
+        "nsgId": "[resourceId('Microsoft.Network/networkSecurityGroups', variables('nsgName'))]",
+        "publicIpId": "[resourceId('Microsoft.Network/publicIPAddresses', variables('publicIpName'))]",
+
+        "dscUrl": "[uri(deployment().properties.templateLink.uri, 'dsc/dsc.zip')]",
+        "vnetTemplateUrl": "[uri(deployment().properties.templateLink.uri, 'nested/vnet.json')]"
+
+    },
+    "resources": [
+
+        // Create the public IP to be attached to the first domain controller
+        {
+            "type": "Microsoft.Network/publicIPAddresses",
+            "apiVersion": "2022-01-01",
+            "name": "[variables('publicIpName')]",
+            "location": "[parameters('location')]",
+            "sku": {
+                    "name": "Standard",
+                    "tier": "Regional"
+            },
+            "zones": [ "1" ],
+            "properties": {
+                    "publicIPAddressVersion": "IPv4",
+                    "publicIPAllocationMethod": "Static",
+                    "idleTimeoutInMinutes": 4
+            }
+        },
+
+        // Create the NSG and the inbound RDP rule
+        {
+            "type": "Microsoft.Network/networkSecurityGroups",
+            "name": "[variables('nsgName')]",
+            "apiVersion": "2022-01-01",
+            "location": "[parameters('location')]",
+            "dependsOn": [
+                "[resourceId('Microsoft.Network/publicIPAddresses', variables('publicIpName'))]"
+            ],
+            "properties": {
+                "securityRules": [{
+                        "name": "RDP",
+                        "properties": {
+                            "provisioningState": "Succeeded",
+                            "protocol": "Tcp",
+                            "sourcePortRange": "*",
+                            "destinationPortRange": "3389",
+                            "sourceAddressPrefix": "[parameters('ClientAllowedIP')]",
+                            "destinationAddressPrefix": "*",
+                            "access": "Allow",
+                            "priority": 300,
+                            "direction": "Inbound",
+                            "sourcePortRanges": [],
+                            "destinationPortRanges": [],
+                            "sourceAddressPrefixes": [],
+                            "destinationAddressPrefixes": []
+                        }
+                    }
+                ]
+            }
+        },
+
+        // Create the virtual network and subnet
+        {
+            "name": "[variables('vnetName')]",
+            "type": "Microsoft.Network/virtualNetworks",
+            "location": "[parameters('location')]",
+            "apiVersion": "2021-08-01",
+            "dependsOn": [
+                "[resourceId('Microsoft.Network/networkSecurityGroups', variables('nsgName'))]"
+            ],
+            "properties": {
+                "addressSpace": {
+                    "addressPrefixes": [
+                        "[variables('vnetPrefix')]"
+                    ]
+                },
+                "subnets": [
+                    {
+                        "name": "[variables('subnetName')]",
+                        "properties": {
+                            "addressPrefix": "[variables('subnetPrefix')]",
+                            "networkSecurityGroup": {
+                                "id": "[variables('nsgId')]"
+                            }
+                        }
+                    }
+                ]
+            }
+        },
+
+        // Create the availability set for the DCs
+        {
+            "type": "Microsoft.Compute/availabilitySets",
+            "apiVersion": "2021-11-01",
+            "name": "[variables('availabilitySetName')]",
+            "location": "[parameters('location')]",
+            "properties": {
+                    "platformUpdateDomainCount": 2,
+                    "platformFaultDomainCount": 2
+            },
+            "sku": {
+                    "name": "Aligned"
+            }
+        },
+
+        // Create the Network Interfaces for the first DC
+        {
+            "type": "Microsoft.Network/networkInterfaces",
+            "apiVersion": "2022-01-01",
+            "name": "[format('{0}-{1}1-nic', parameters('Prefix'), variables('PrefixDCs'))]",
+            "location": "[parameters('location')]",
+            "dependsOn": [
+                    "[resourceId('Microsoft.Network/virtualNetworks', variables('vnetName'))]",
+                    "[resourceId('Microsoft.Network/publicIPAddresses', variables('publicIpName'))]"
+            ],
+            "properties": {
+                "ipConfigurations": [
+                    {
+                        "name": "ipconfig1",
+                        "properties": {
+                            "privateIPAllocationMethod": "Static",
+                            "privateIPAddress": "[format('{0}.{1}.{2}.{3}', variables('subnetPrefixSplit')[0], variables('subnetPrefixSplit')[1], variables('subnetPrefixSplit')[2], add(variables('ipOffsetStart'), 1))]",
+                            "primary": true,
+                            "subnet": {
+                                    "id": "[variables('subnetId')]"
+                            },
+                            "publicIPAddress": {
+                                    "id": "[variables('publicIpId')]"
+                            }
+                        }
+                    }
+                ]
+            }
+        },
+
+        // Create the Network Interfaces for the second DC
+        {
+            "type": "Microsoft.Network/networkInterfaces",
+            "apiVersion": "2022-01-01",
+            "name": "[format('{0}-{1}2-nic', parameters('Prefix'), variables('PrefixDCs'))]",
+            "location": "[parameters('location')]",
+            "dependsOn": [
+                    "[resourceId('Microsoft.Network/virtualNetworks', variables('vnetName'))]"
+            ],
+            "properties": {
+                "ipConfigurations": [
+                    {
+                        "name": "ipconfig1",
+                        "properties": {
+                            "privateIPAllocationMethod": "Static",
+                            "privateIPAddress": "[format('{0}.{1}.{2}.{3}', variables('subnetPrefixSplit')[0], variables('subnetPrefixSplit')[1], variables('subnetPrefixSplit')[2], add(variables('ipOffsetStart'), 2))]",
+                            "primary": true,
+                            "subnet": {
+                                    "id": "[variables('subnetId')]"
+                            }
+                        }
+                    }
+                ]
+            }
+        },
+
+        // Create the Network Interfaces for the Member Servers
+        {
+            "type": "Microsoft.Network/networkInterfaces",
+            "apiVersion": "2022-01-01",
+            "copy": {
+                    "name": "nicLoopMembers",
+                    "count": "[int(parameters('NumberOfMemberServers'))]"
+            },
+            "name": "[format('{0}-{1}{2}-nic', parameters('Prefix'), variables('PrefixMembers'), copyindex('nicLoopMembers', 1))]",
+            "location": "[parameters('location')]",
+            "dependsOn": [
+                    "[resourceId('Microsoft.Network/virtualNetworks', variables('vnetName'))]"
+            ],
+            "properties": {
+                "ipConfigurations": [
+                    {
+                        "name": "ipconfig1",
+                        "properties": {
+                            "subnet": {
+                                    "id": "[variables('subnetId')]"
+                            },
+                            "privateIPAllocationMethod": "Static",
+                            "privateIPAddress": "[format('{0}.{1}.{2}.{3}', variables('subnetPrefixSplit')[0], variables('subnetPrefixSplit')[1], variables('subnetPrefixSplit')[2], add(variables('ipOffsetStart'), copyIndex('nicLoopMembers', 3)))]",
+                            "primary": true
+                        }
+                    }
+                ]
+            }
+        },
+
+        // Create the first Domain Controller VM
+        {
+            "type": "Microsoft.Compute/virtualMachines",
+            "apiVersion": "2022-03-01",
+            "name": "[format('{0}-{1}1-vm', parameters('Prefix'), variables('PrefixDCs'))]",
+            "location": "[parameters('location')]",
+            "dependsOn": [
+                    "[resourceId('Microsoft.Compute/availabilitySets', variables('availabilitySetName'))]",
+                    "[resourceId('Microsoft.Network/NetworkInterfaces', format('{0}-{1}1-nic', parameters('Prefix'), variables('PrefixDCs')))]",
+            ],
+            "properties": {
+                "availabilitySet": {
+                        "id": "[resourceId('Microsoft.Compute/availabilitySets', variables('availabilitySetName'))]"
+                },
+                "hardwareProfile": {
+                        "vmSize": "[parameters('vmSizeDCs')]"
+                },
+                "storageProfile": {
+                    "osDisk": {
+                        "createOption": "fromImage",
+                        "managedDisk": {
+                                "storageAccountType": "Premium_LRS"
+                        }
+                    },
+                    "imageReference": {
+                        "publisher": "MicrosoftWindowsServer",
+                        "offer": "WindowsServer",
+                        "sku": "2019-Datacenter",
+                        "version": "latest"
+                    }
+                },
+                "networkProfile": {
+                    "networkInterfaces": [
+                        {
+                            "id": "[resourceId('Microsoft.Network/networkInterfaces', format('{0}-{1}1-nic', parameters('Prefix'), variables('PrefixDCs')))]"
+                        }
+                    ]
+                },
+                "osProfile": {
+                    "computerName": "[format('{0}1', variables('PrefixDCs'))]",
+                    "adminUsername": "[parameters('VmAdminUser')]",
+                    "adminPassword": "[parameters('VmAdminPassword')]",
+                    "windowsConfiguration": {
+                        "provisionVMAgent": true,
+                        "enableAutomaticUpdates": true,
+                        "patchSettings": {
+                                "patchMode": "AutomaticByOS",
+                                "assessmentMode": "ImageDefault",
+                                "enableHotpatching": false
+                        }
+                    },
+                    "allowExtensionOperations": true
+                },
+                "diagnosticsProfile": {
+                    "bootDiagnostics": {
+                            "enabled": true
+                    }
+                }
+            }
+        },
+
+        // DSC Extension for the first DC
+        {
+            "type": "Microsoft.Compute/virtualMachines/extensions",
+            "apiVersion": "2021-11-01",
+            "name": "[format('{0}-{1}1-vm/Microsoft.Powershell.DSC', parameters('Prefix'), variables('PrefixDCs'))]",
+            "location": "[parameters('location')]",
+            "dependsOn": [
+                    "[resourceId('Microsoft.Compute/virtualMachines', format('{0}-{1}1-vm', parameters('Prefix'), variables('PrefixDCs')))]"
+            ],
+            "properties": {
+                "publisher": "Microsoft.Powershell",
+                "type": "DSC",
+                "typeHandlerVersion": "2.83",
+                "autoUpgradeMinorVersion": true,
+                "settings": {
+                    "wmfVersion": "latest",
+                    "configurationFunction": "dsc.ps1\\PDC",
+                    "modulesUrl": "[variables('dscUrl')]",
+                    "properties": {
+                        "DomainName": "[parameters('domainName')]",
+                        "DomainCreds": {
+                            "UserName": "[concat(parameters('domainName'), '\\', parameters('vmAdminUser'))]",
+                            "Password": "PrivateSettingsRef:DomainPassword"
+                        }
+                    }
+                },
+                "protectedSettings": {
+                    "Items": {
+                        "DomainPassword": "[parameters('vmAdminPassword')]"
+                    }
+                }
+            }
+        },
+
+        // Update vnet DNS with the first DC private IP address
+        {
+            "type": "Microsoft.Resources/deployments",
+            "apiVersion": "2021-04-01",
+            "name": "updateVNetDns1",
+            "dependsOn": [
+                    "[resourceId('Microsoft.Compute/virtualMachines/extensions', format('{0}-{1}1-vm', parameters('Prefix'), variables('PrefixDCs')), 'Microsoft.Powershell.DSC')]"
+            ],
+            "properties": {
+                "mode": "Incremental",
+                "templateLink": {
+                    "uri": "[variables('vnetTemplateUrl')]",
+                    "contentVersion": "1.0.0.0"
+                },
+                "parameters": {
+                    "vnetName": {
+                        "value": "[variables('vnetName')]"
+                    },
+                    "subnetName": {
+                        "value": "[variables('subnetName')]"
+                    },
+                    "vnetPrefix": {
+                        "value": "[variables('vnetPrefix')]"
+                    },
+                    "subnetPrefix":{
+                        "value": "[variables('subnetPrefix')]"
+                    },
+                    "nsgId": {
+                        "value": "[variables('nsgId')]"
+                    },
+                    "dnsServerAddress": {
+                        "value": [
+                            "[variables('firstDcPrivateIp')]"
+                        ]
+                    },
+                    "location": {
+                        "value": "[parameters('location')]"
+                    }
+                }
+            }
+        },
+
+        // Create the second Domain Controller VM
+        {
+            "type": "Microsoft.Compute/virtualMachines",
+            "apiVersion": "2022-03-01",
+            "name": "[format('{0}-{1}2-vm', parameters('Prefix'), variables('PrefixDCs'))]",
+            "location": "[parameters('location')]",
+            "dependsOn": [
+                    "[resourceId('Microsoft.Compute/availabilitySets', variables('availabilitySetName'))]",
+                    "[resourceId('Microsoft.Network/NetworkInterfaces', format('{0}-{1}2-nic', parameters('Prefix'), variables('PrefixDCs')))]",
+            ],
+            "properties": {
+                "availabilitySet": {
+                        "id": "[resourceId('Microsoft.Compute/availabilitySets', variables('availabilitySetName'))]"
+                },
+                "hardwareProfile": {
+                        "vmSize": "[parameters('vmSizeDCs')]"
+                },
+                "storageProfile": {
+                    "osDisk": {
+                        "name": "[format('{0}-{1}2-osDisk', parameters('Prefix'), variables('PrefixDCs'))]",
+                        "createOption": "fromImage",
+                        "managedDisk": {
+                                "storageAccountType": "Premium_LRS"
+                        }
+                    },
+                    "imageReference": {
+                        "publisher": "MicrosoftWindowsServer",
+                        "offer": "WindowsServer",
+                        "sku": "2019-Datacenter",
+                        "version": "latest"
+                    }
+                },
+                "networkProfile": {
+                    "networkInterfaces": [
+                        {
+                            "id": "[resourceId('Microsoft.Network/networkInterfaces', format('{0}-{1}2-nic', parameters('Prefix'), variables('PrefixDCs')))]"
+                        }
+                    ]
+                },
+                "osProfile": {
+                    "computerName": "[format('{0}2', variables('PrefixDCs'))]",
+                    "adminUsername": "[parameters('VmAdminUser')]",
+                    "adminPassword": "[parameters('VmAdminPassword')]",
+                    "windowsConfiguration": {
+                        "provisionVMAgent": true,
+                        "enableAutomaticUpdates": true,
+                        "patchSettings": {
+                                "patchMode": "AutomaticByOS",
+                                "assessmentMode": "ImageDefault",
+                                "enableHotpatching": false
+                        }
+                    },
+                    "allowExtensionOperations": true
+                },
+                "diagnosticsProfile": {
+                    "bootDiagnostics": {
+                        "enabled": true
+                    }
+                }
+            }
+        },
+
+        // Create the Member Server VMs
+        {
+            "type": "Microsoft.Compute/virtualMachines",
+            "apiVersion": "2022-03-01",
+            "copy": {
+                "name": "vmLoopMembers",
+                "count": "[int(parameters('NumberOfMemberServers'))]"
+            },
+            "name": "[format('{0}-{1}{2}-vm', parameters('Prefix'), variables('PrefixMembers'), copyIndex('vmLoopMembers', 1))]",
+            "location": "[parameters('location')]",
+            "dependsOn": [
+                "nicLoopMembers"
+            ],
+            "properties": {
+                "hardwareProfile": {
+                        "vmSize": "[parameters('vmSizeMemberServers')]"
+                },
+                "storageProfile": {
+                    "osDisk": {
+                        "name": "[format('{0}-{1}{2}-osDisk', parameters('Prefix'), variables('PrefixMembers'), copyIndex('vmLoopMembers', 1))]",
+                        "createOption": "fromImage",
+                        "managedDisk": {
+                            "storageAccountType": "Premium_LRS"
+                        }
+                    },
+                    "imageReference": {
+                        "publisher": "MicrosoftWindowsServer",
+                        "offer": "WindowsServer",
+                        "sku": "2019-Datacenter",
+                        "version": "latest"
+                    }
+                },
+                "networkProfile": {
+                    "networkInterfaces": [
+                        {
+                            "id": "[resourceId('Microsoft.Network/networkInterfaces', format('{0}-{1}{2}-nic', parameters('Prefix'), variables('PrefixMembers'), copyIndex('vmLoopMembers', 1)))]"
+                        }
+                    ]
+                },
+                "osProfile": {
+                    "computerName": "[format('{0}{1}', variables('PrefixMembers'), copyIndex('vmLoopMembers', 1))]",
+                    "adminUsername": "[parameters('VmAdminUser')]",
+                    "adminPassword": "[parameters('VmAdminPassword')]",
+                    "windowsConfiguration": {
+                        "provisionVMAgent": true,
+                        "enableAutomaticUpdates": true,
+                        "patchSettings": {
+                            "patchMode": "AutomaticByOS",
+                            "assessmentMode": "ImageDefault",
+                            "enableHotpatching": false
+                        }
+                    },
+                    "allowExtensionOperations": true
+                },
+                "diagnosticsProfile": {
+                    "bootDiagnostics": {
+                        "enabled": true
+                    }
+                }
+            }
+        },
+
+        // DSC Extension for the Member Servers
+        {
+            "type": "Microsoft.Compute/virtualMachines/extensions",
+            "apiVersion": "2021-11-01",
+            "copy": {
+                "name": "dscLoopMembers",
+                "count": "[parameters('NumberOfMemberServers')]"
+            },
+            "name": "[format('{0}-{1}{2}-vm/Microsoft.Powershell.DSC', parameters('Prefix'), variables('PrefixMembers'), copyIndex('dscLoopMembers', 1))]",
+            "location": "[parameters('location')]",
+            "dependsOn": [
+                "[resourceId('Microsoft.Compute/virtualMachines', format('{0}-{1}{2}-vm', parameters('Prefix'), variables('PrefixMembers'), copyIndex('dscLoopMembers', 1)))]",
+                "[resourceId('Microsoft.Compute/virtualMachines/extensions', format('{0}-{1}1-vm', parameters('Prefix'), variables('PrefixDCs')), 'Microsoft.Powershell.DSC')]",
+                "[resourceId('Microsoft.Resources/deployments', 'updateVNetDns1')]"
+            ],
+            "properties": {
+                "publisher": "Microsoft.Powershell",
+                "type": "DSC",
+                "typeHandlerVersion": "2.83",
+                "autoUpgradeMinorVersion": true,
+                "settings": {
+                    "wmfVersion": "latest",
+                    "configurationFunction": "[format('dsc.ps1\\MemberServer')]",
+                    "modulesUrl": "[variables('dscUrl')]",
+                    "properties": {
+                        "DomainName": "[parameters('domainName')]",
+                        "DomainCreds": {
+                            "UserName": "[concat(parameters('domainName'), '\\', parameters('vmAdminUser'))]",
+                            "Password": "PrivateSettingsRef:DomainPassword"
+                        }
+                    }
+                },
+                "protectedSettings": {
+                    "Items": {
+                        "DomainPassword": "[parameters('vmAdminPassword')]"
+                    }
+                }
+            }
+        },
+
+        // DSC Extension for the second DC
+        {
+            "type": "Microsoft.Compute/virtualMachines/extensions",
+            "apiVersion": "2021-11-01",
+            "name": "[format('{0}-{1}2-vm/Microsoft.Powershell.DSC', parameters('Prefix'), variables('PrefixDCs'))]",
+            "location": "[parameters('location')]",
+            "dependsOn": [
+                "[resourceId('Microsoft.Compute/virtualMachines', format('{0}-{1}2-vm', parameters('Prefix'), variables('PrefixDCs')))]",
+                "[resourceId('Microsoft.Compute/virtualMachines/extensions', format('{0}-{1}1-vm', parameters('Prefix'), variables('PrefixDCs')), 'Microsoft.Powershell.DSC')]",
+                "[resourceId('Microsoft.Resources/deployments', 'updateVNetDns1')]"
+            ],
+            "properties": {
+                "publisher": "Microsoft.Powershell",
+                "type": "DSC",
+                "typeHandlerVersion": "2.83",
+                "autoUpgradeMinorVersion": true,
+                "settings": {
+                    "wmfVersion": "latest",
+                    "configurationFunction": "dsc.ps1\\BDC",
+                    "modulesUrl": "[variables('dscUrl')]",
+                    "properties": {
+                        "DomainName": "[parameters('domainName')]",
+                        "DomainCreds": {
+                            "UserName": "[concat(parameters('domainName'), '\\', parameters('vmAdminUser'))]",
+                            "Password": "PrivateSettingsRef:DomainPassword"
+                        }
+                    }
+                },
+                "protectedSettings": {
+                    "Items": {
+                        "DomainPassword": "[parameters('vmAdminPassword')]"
+                    }
+                }
+            }
+        },
+
+        // Update vnet DNS with Both DCs private IP addresses
+        {
+            "type": "Microsoft.Resources/deployments",
+            "apiVersion": "2021-04-01",
+            "name": "updateVNetDns2",
+            "dependsOn": [
+                    "[resourceId('Microsoft.Compute/virtualMachines/extensions', format('{0}-{1}2-vm', parameters('Prefix'), variables('PrefixDCs')), 'Microsoft.Powershell.DSC')]"
+            ],
+            "properties": {
+                "mode": "Incremental",
+                "templateLink": {
+                    "uri": "[variables('vnetTemplateUrl')]",
+                    "contentVersion": "1.0.0.0"
+                },
+                "parameters": {
+                    "vnetName": {
+                        "value": "[variables('vnetName')]"
+                    },
+                    "subnetName": {
+                        "value": "[variables('subnetName')]"
+                    },
+                    "vnetPrefix": {
+                        "value": "[variables('vnetPrefix')]"
+                    },
+                    "subnetPrefix":{
+                        "value": "[variables('subnetPrefix')]"
+                    },
+                    "nsgId": {
+                        "value": "[variables('nsgId')]"
+                    },
+                    "dnsServerAddress": {
+                        "value": [
+                            "[variables('firstDcPrivateIp')]",
+                            "[variables('secondDcPrivateIp')]"
+                        ]
+                    },
+                    "location": {
+                        "value": "[parameters('location')]"
+                    }
+                }
+            }
+        }
+    ],
+    "outputs": {
+        "IPAddress": {
+            "type": "string",
+            "value": "[reference(resourceId('Microsoft.Network/publicIPAddresses', variables('publicIpName'))).ipAddress]"
+        }
+    }
+}

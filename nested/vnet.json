@@ -1,0 +1,77 @@
+{
+    "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentTemplate.json#",
+    "contentVersion": "1.0.0.0",
+    "parameters": {
+        "vnetName": {
+            "type": "string",
+            "metadata": {
+                "description": "The virtual network name."
+            }
+        },
+        "subnetName": {
+            "type": "string",
+            "metadata": {
+                "description": "The subnet name."
+            }
+        },
+        "vnetPrefix": {
+            "type": "string",
+            "metadata": {
+                "description": "The virtual network CIDR address space."
+            }
+        },
+        "subnetPrefix":{
+            "type": "string",
+            "metadata": {
+                "description": "The subnet CIDR address space."
+            }
+        },
+        "nsgId": {
+            "type": "string",
+            "metadata": {
+                "description": "The resourceId for the network security group to attach to the subnet."
+            }
+        },
+        "dnsServerAddress": {
+            "type": "array",
+            "metadata": {
+                "description": "The DNS address(es) of the DNS Server(s) used by the VNET"
+            }
+        },
+        "location": {
+            "type": "string",
+            "defaultValue": "[resourceGroup().location]",
+            "metadata": {
+                "description": "Optional. The location to deploy the resources."
+            }
+        }
+    },
+    "resources": [
+        {
+            "type": "Microsoft.Network/virtualNetworks",
+            "apiVersion": "2021-03-01",
+            "name": "[parameters('vnetName')]",
+            "location": "[parameters('location')]",
+            "properties": {
+                "dhcpOptions": {
+                    "dnsServers": "[parameters('dnsServerAddress')]"
+                },
+                "addressSpace": {
+                    "addressPrefixes": [ "[parameters('vnetPrefix')]" ]
+                }
+                ,
+                "subnets": [
+                    {
+                        "name": "[parameters('subnetName')]",
+                        "properties": {
+                            "addressPrefix": "[parameters('subnetPrefix')]",
+                            "networkSecurityGroup": {
+                                "id": "[parameters('nsgId')]"
+                            }
+                        }
+                    }
+                ]
+            }
+        }
+    ]
+}
