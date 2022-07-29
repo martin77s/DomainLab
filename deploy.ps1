@@ -1,5 +1,5 @@
 param(
-    [string] $TemplateUri = ' https://raw.githubusercontent.com/martin77s/DomainLab/main/azuredeploy.json',
+    [string] $TemplateUri = 'https://raw.githubusercontent.com/martin77s/DomainLab/main/azuredeploy.json',
     [string] $ResourceGroupName = ('domainlab-{0:yyyyMMddHHmm}' -f (Get-Date)),
     [string] $Location = 'northeurope',
     [string] $Prefix = 'lab',
@@ -13,8 +13,12 @@ param(
 
 
 # Understand the public IP address of the machine deploying the template
-$publicIp = (Invoke-WebRequest -Uri 'https://api.ipify.org/?format=json').Content | ConvertFrom-Json
-$clientAllowedIP = '{0}/32' -f $publicIp.ip
+try {
+    $publicIp = (Invoke-WebRequest -Uri 'https://api.ipify.org/?format=json').Content | ConvertFrom-Json
+    $clientAllowedIP = '{0}/32' -f $publicIp.ip
+} catch {
+    $clientAllowedIP = '0.0.0.0/32'
+}
 
 
 # Create the deployment template parameters hashtable
